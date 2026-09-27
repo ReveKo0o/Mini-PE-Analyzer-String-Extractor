@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mini PE Analyzer & String Extractor</title>
+    <style>
+        :root {
+            --bg-color: #080808;
+            --panel-bg: #0f0f0f;
+            --text-color: #00ff66;
+            --dim-text: #888888;
+            --border-color: #333333;
+            --accent-color: #712bc8;
+        }
+
+        body {
+            font-family: 'Courier New', Courier, monospace;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            box-sizing: border-box;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 800px;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        h1 {
+            font-size: 1.2rem;
+            color: var(--accent-color);
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 10px;
+            margin-top: 0;
+            text-transform: uppercase;
+        }
+
+        .drop-zone {
+            border: 1px dashed var(--border-color);
+            padding: 30px;
+            text-align: center;
+            cursor: pointer;
+            margin-bottom: 20px;
+            background: var(--bg-color);
+        }
+
+        .drop-zone:hover {
+            border-color: var(--text-color);
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        .section {
+            margin-bottom: 20px;
+            border: 1px solid var(--border-color);
+            padding: 15px;
+            background: var(--bg-color);
+        }
+
+        .section h2 {
+            font-size: 0.9rem;
+            color: var(--accent-color);
+            margin-top: 0;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 5px;
+        }
+
+        pre {
+            background: #000;
+            border: 1px solid var(--border-color);
+            padding: 10px;
+            overflow-x: auto;
+            font-size: 0.85rem;
+            max-height: 200px;
+            margin: 0;
+            color: #d0d0d0;
+        }
+
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.85rem;
+            margin-bottom: 5px;
+            border-bottom: 1px dotted var(--border-color);
+            padding-bottom: 3px;
+        }
+
+        .label {
+            color: var(--dim-text);
+        }
+
+        .val {
+            color: var(--text-color);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>// MINI PE ANALYZER & STRING EXTRACTOR</h1>
+
+        <!-- Drop Zone -->
+        <div class="drop-zone" id="drop-zone">
+            [+] DROP EXECUTABLE (.EXE / .BIN) HERE OR CLICK TO BROWSE
+            <input type="file" id="file-input">
+        </div>
+
+        <!-- File Info Section -->
+        <div class="section">
+            <h2>FILE METADATA</h2>
+            <div class="info-row"><span class="label">Filename:</span> <span class="val" id="file-name">N/A</span></div>
+            <div class="info-row"><span class="label">Size:</span> <span class="val" id="file-size">N/A</span></div>
+            <div class="info-row"><span class="label">Architecture / Type:</span> <span class="val" id="file-arch">N/A</span></div>
+        </div>
+
+        <!-- PE Structure / Imports -->
+        <div class="section">
+            <h2>DETECTED IMPORTS / NETWORK APIs</h2>
+            <div id="imports-output" style="font-size: 0.85rem; color: var(--dim-text);">No analysis performed yet.</div>
+        </div>
+
+        <!-- Extracted Strings -->
+        <div class="section">
+            <h2>EXTRACTED STRINGS (URLS, IPS, MESSAGES)</h2>
+            <pre id="strings-output">No strings extracted yet.</pre>
+        </div>
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+
+        dropZone.addEventListener('click', () => fileInput.click());
+
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.style.borderColor = 'var(--text-color)';
+        });
+
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.style.borderColor = 'var(--border-color)';
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.style.borderColor = 'var(--border-color)';
+            if (e.dataTransfer.files.length > 0) {
+                analyzeFile(e.dataTransfer.files[0]);
+            }
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                analyzeFile(e.target.files[0]);
+            }
+        });
+
+        function analyzeFile(file) {
+            document.getElementById('file-name').innerText = file.name;
+            document.getElementById('file-size').innerText = (file.size / 1024).toFixed(2) + ' KB';
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const arrayBuffer = e.target.result;
+                const uint8Array = new Uint8Array(arrayBuffer);
+
+                // 1. Simple PE Check (MZ Header)
+                let isPE = false;
+                if (uint8Array[0] === 0x4D && uint8Array[1] === 0x5A) { // 'MZ'
+                    isPE = true;
+                }
+
+                document.getElementById('file-arch').innerText = isPE ? 'Windows PE Executable' : 'Generic Binary / Unknown';
+
+                // 2. String Extraction (readable ASCII text longer than 4 characters)
+                extractStrings(uint8Array);
+
+                // 3. Basic API / DLL Scan (Network / Suspicious keywords)
+                scanForKeywords(uint8Array);
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        function extractStrings(uint8Array) {
+            let strings = [];
+            let currentStr = '';
+            
+            for (let i = 0; i < uint8Array.length; i++) {
+                let charCode = uint8Array[i];
+                // Standard printable ASCII character range (32 - 126)
+                if (charCode >= 32 && charCode <= 126) {
+                    currentStr += String.fromCharCode(charCode);
+                } else {
+                    if (currentStr.length >= 5) {
+                        strings.push(currentStr);
+                    }
+                    currentStr = '';
+                }
+            }
+            if (currentStr.length >= 5) {
+                strings.push(currentStr);
+            }
+
+            // Only strings that might be interesting, or the first 100 strings.
+            const outputPre = document.getElementById('strings-output');
+            outputPre.innerText = strings.slice(0, 150).join('\n') || 'No readable strings found.';
+        }
+
+        function scanForKeywords(uint8Array) {
+            // The section for converting to text representation and searching for core network/system DLLs.
+            let textDecoder = new TextDecoder('utf-8', { fatal: false });
+            let fullText = textDecoder.decode(uint8Array);
+
+            let keywords = ['ws2_32.dll', 'wininet.dll', 'urlmon.dll', 'http://', 'https://', 'Socket', 'Connect', 'RegOpenKey', 'CreateProcess'];
+            let found = [];
+
+            keywords.forEach(kw => {
+                if (fullText.toLowerCase().includes(kw.toLowerCase())) {
+                    found.push(kw);
+                }
+            });
+
+            const importsOut = document.getElementById('imports-output');
+            if (found.length > 0) {
+                importsOut.innerHTML = `<span style="color: var(--text-color);">[!] Potential Indicators Found:</span><br>` + found.map(f => `- ${f}`).join('<br>');
+            } else {
+                importsOut.innerHTML = `[-] No common network or system APIs explicitly matched in raw text.`;
+            }
+        }
+    </script>
+</body>
+</html>
